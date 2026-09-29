@@ -27,6 +27,10 @@ def add_root(path):
     if folder == BASE or BASE in folder.parents or folder in BASE.parents:
         raise ValueError('源目录不能是项目目录或其上级目录')
     roots = get_roots()
+    for existing in roots:
+        parent = Path(existing)
+        if folder != parent and (folder in parent.parents or parent in folder.parents):
+            raise ValueError(f'Overlapping roots / 目录重叠：{existing}；只添加共同的上级目录或互不包含的目录')
     if str(folder).casefold() not in {p.casefold() for p in roots}:
         roots.append(str(folder))
         CONFIG.parent.mkdir(parents=True, exist_ok=True)

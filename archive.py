@@ -17,11 +17,7 @@ from scipy.ndimage import maximum_filter
 from PIL import Image
 warnings.filterwarnings('ignore', category=Warning, module='astropy')
 DB = DATA / 'archive.sqlite'
-ASTAP = Path(os.environ.get('ASTAP_PATH') or shutil.which('astap_cli') or shutil.which('astap') or r'C:\Program Files\astap\astap_cli.exe')
-GAOYAZI_SCOPES = {
-    'scope_sr130apo': 'Sky Rover 130 APO',
-    'scope_sw200': 'Sky-Watcher 200 Newtonian',
-}
+import settings
 
 def ident(s): return hashlib.sha256(str(s).encode('utf8')).hexdigest()[:20]
 def target_key(s): return re.sub(r'[\s_\-]+','',str(s or '')).casefold()
@@ -75,20 +71,20 @@ def observing_night(record):
         try:return (datetime.fromisoformat(record['date_local'])-timedelta(hours=12)).date().isoformat()
         except ValueError:pass
     return (record.get('date') or '未知')[:10]
-def focal_band(focal):
-    if focal is None:return 'FITS 焦距未知'
-    if focal<650:return 'FITS 焦距 <650 mm'
-    if focal<800:return 'FITS 焦距 650–799 mm'
-    return 'FITS 焦距 ≥800 mm'
-def identify_device(meta, path):
-    """Use the known Gaoyazi scope directories; retain FITS TELESCOP verbatim."""
-    parts=[part.casefold() for part in Path(path).parts]
-    scope=next((GAOYAZI_SCOPES[part] for part in parts if part in GAOYAZI_SCOPES),None) if 'gaoyazi_cam_6200mm' in parts else None
-    raw=meta.get('telescope')
-    is_140ph='140ph_cam_2600mcduo1' in parts
-    meta['telescope_display']=scope or ('140PH 目录' if is_140ph else raw)
-    meta['telescope_source']='Gaoyazi 镜筒目录' if scope else ('140PH 设备目录' if is_140ph else 'FITS TELESCOP')
-    meta['device']=' | '.join(str(v if v is not None else '未知') for v in (meta.get('camera'),meta['telescope_display'],focal_band(meta.get('focal')) if is_140ph else meta.get('focal')))
+def focal_band(focal, bins):
+    if focal is None: return 'FITS 焦距未知'
+    for i, upper in enumerate(bins):
+        if focal < upper:
+            return f'FITS 焦距 <{upper} mm' if i == 0 else f'FITS 焦距 {bins[i-1]}–{upper-1} mm'
+    return f'FITS 焦距 ≥{bins[-1]} mm'
+
+def identify_device(meta, path, rules=None):
+    """Use FITS metadata unless this installation explicitly overrides the directory."""
+    rule=settings.device_rule(path,rules)
+    meta['telescope_display']=rule['telescope'] if rule else meta.get('telescope')
+    meta['telescope_source']='directory_override' if rule else 'FITS TELESCOP'
+    focal=focal_band(meta.get('focal'),rule['focal_bins']) if rule and rule.get('focal_bins') else meta.get('focal')
+    meta['device']=' | '.join(str(v if v is not None else '未知') for v in (meta.get('camera'),meta['telescope_display'],focal))
     date=meta.get('date')
     if date:
         meta['acquisition']=ident([meta['device'],date,meta.get('filter'),meta.get('exposure'),meta.get('width'),meta.get('height'),meta.get('binning')])
@@ -167,6 +163,16 @@ def scan(root):
         except Exception as e: m={'error':str(e),'type':'未知','version':'unknown'}; stats['error']+=1
         c.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)',(key,str(p),str(root),s.st_size,s.st_mtime_ns,1,dumps(m)))
         c.execute('DELETE FROM solutions WHERE id=?',(key,))
+        if m.get('type')=='Light' and m.get('existing_wcs') and 'bad' not in [x.casefold() for x in p.parts]:
+            try:
+                quality=quality_preview(p,dict(m,id=key))
+                if quality['suspicious']: raise ValueError(quality['reason'])
+                payload=dict(m['existing_wcs'],source='validated_header_wcs',quality=quality,wcs_header=m['header'])
+                c.execute('INSERT OR REPLACE INTO solutions VALUES (?,?,?)',(key,'solved',dumps(payload)))
+                stats['header_wcs']+=1
+            except Exception as exc:
+                c.execute('INSERT OR REPLACE INTO solutions VALUES (?,?,?)',(key,'failed',dumps({'error':str(exc)})))
+                stats['wcs_review']+=1
         if (stats['read']+stats['error'])%25==0: c.commit()
         if (stats['read']+stats['error'])%100==0: print(dumps(dict(stats)),flush=True)
     # Only mark deletions after a completed walk. Interrupted scans retain progress.
@@ -181,12 +187,13 @@ def scan(root):
 def records():
     c=connect()
     rows=[]
+    rules=settings.load()['device_overrides']
     for key,path,root,meta,status,payload in c.execute('SELECT f.id,f.path,f.root,f.meta,s.status,s.payload FROM files f LEFT JOIN solutions s ON f.id=s.id WHERE active=1'):
         m=json.loads(meta)
         if not m.get('error'):
             local_time_from_header(m)
             capture_version_from_saved_header(m)
-            identify_device(m,path)
+            identify_device(m,path,rules)
         m.update(id=key,path=path,root=root,status=status or 'pending',solution=json.loads(payload) if payload else None); rows.append(m)
         if any(x.lower()=='bad' for x in Path(path).parts): m['review_reason']='原目录 bad 子目录；需人工复核，未推断具体质量原因'
     c.close()
@@ -253,8 +260,7 @@ def solve(r,timeout=90,retry=False):
             geom=r['existing_wcs']; payload['source']='validated_header_wcs'
             h.tofile(dest/'header-wcs.fits',overwrite=True)
         else:
-            if not ASTAP.is_file(): raise RuntimeError('缺少 ASTAP: '+str(ASTAP))
-            cmd=[str(ASTAP),'-f',str(local),'-o',str(dest/'solution'),'-d',str(ASTAP.parent),'-D','d50','-r','10' if r.get('pointing') else '180','-wcs','-log']
+            cmd=settings.solver_command(local,dest/'solution',r.get('pointing'))
             if r.get('pointing'): cmd += ['-ra',str(r['pointing'][0]/15),'-spd',str(r['pointing'][1]+90)]
             pix=num(h.get('YPIXSZ')); focal=r.get('focal'); biny=num(h.get('YBINNING'))
             if pix and focal and biny: cmd += ['-fov',str(math.degrees(2*math.atan(r['height']*pix*biny/1000/(2*focal))))]
@@ -268,7 +274,7 @@ def solve(r,timeout=90,retry=False):
             (dest/'run.log').write_text(log,encoding='utf8'); payload['returncode']=result.returncode
             ini=dest/'solution.ini'; wcs=dest/'solution.wcs'
             if result.returncode or not ini.exists() or 'PLTSOLVD=T' not in ini.read_text(errors='replace') or not wcs.exists(): raise ValueError('ASTAP 未获得解；参见本地 run.log，不推断天气或开顶状态')
-            h=fits.getheader(wcs); geom=geometry(h,r['width'],r['height']); payload['source']='ASTAP D50'
+            h=fits.getheader(wcs); geom=geometry(h,r['width'],r['height']); payload['source']='ASTAP'
         payload.update(geom); payload['wcs_header']=h.tostring(sep='\n',padding=False); status='solved'
     except subprocess.TimeoutExpired: status='timeout'; payload['error']=f'解析超时（{timeout}秒），可重试'
     except Exception as e: payload['error']=str(e)
@@ -316,26 +322,19 @@ def sample(limit=8,timeout=90):
     for rr in chosen[:limit]: partition(rr,True,timeout)
     print(dumps({'selected_batches':min(limit,len(bs)),'available_batches':len(bs)}))
 
-def sample_roots(per_root=2,timeout=90,roots=None):
+def sample_roots(per_root=0,timeout=90,roots=None,progress=None):
     from roots import get_roots
     all_batches=batches(records())
     results=[]
     for root in (get_roots() if roots is None else roots):
-        choices=[b for b in all_batches if b[0]['root'].lower()==root.lower() and b[0]['version']=='raw' and str(b[0].get('target') or '').strip().lower() not in ('target','test','unknown','未知') and not any(x.lower()=='bad' for x in Path(b[0]['path']).parts)]
+        choices=[b for b in all_batches if b[0]['root'].lower()==root.lower() and b[0]['version'] in ('raw','unknown') and not any(x.lower()=='bad' for x in Path(b[0]['path']).parts)]
         choices.sort(key=lambda b:(-len(b),b[0]['id']))
-        picked=[]; devices=set(); targets=set()
-        for b in choices:
-            if b[0]['device'] not in devices:
-                picked.append(b);devices.add(b[0]['device']);targets.add((b[0]['device'],b[0]['target']))
-            if len(picked)>=per_root: break
-        if len(picked)<per_root:
-            for b in choices:
-                key=(b[0]['device'],b[0]['target'])
-                if key not in targets:
-                    picked.append(b);targets.add(key)
-                if len(picked)>=per_root: break
-        for b in picked:
+        # 0 explicitly means all batches, including repeated sessions of one target.
+        picked=choices if per_root == 0 else choices[:per_root]
+        for i,b in enumerate(picked,1):
+            if progress: progress(root,i-1,len(picked))
             partition(b,True,timeout)
+            if progress: progress(root,i,len(picked))
         results.append(dict(root=root,chosen=[dict(device=b[0]['device'],target=b[0]['target'],count=len(b)) for b in picked],available=len(choices)))
         print(dumps(results[-1]),flush=True)
     (DATA/'sample-roots.json').write_text(dumps(results),encoding='utf8')
@@ -343,7 +342,7 @@ def sample_roots(per_root=2,timeout=90,roots=None):
 def sample_target(name,timeout=90,progress=None):
     key=target_key(name)
     if not key: raise ValueError('目标名不能为空')
-    bs=[b for b in batches(records()) if target_key(b[0].get('target'))==key and b[0]['version']=='raw' and not any(x.casefold()=='bad' for x in Path(b[0]['path']).parts)]
+    bs=[b for b in batches(records()) if target_key(b[0].get('target'))==key and b[0]['version'] in ('raw','unknown') and not any(x.casefold()=='bad' for x in Path(b[0]['path']).parts)]
     print(dumps({'target':name,'batches':len(bs),'files':sum(len(b) for b in bs)}),flush=True)
     for i,b in enumerate(bs,1):
         partition(b,True,timeout)
@@ -356,7 +355,7 @@ def sample_missing_targets(limit=5,timeout=60):
     by_key=collections.defaultdict(list)
     for batch in batches(rows):
         indexes={0,len(batch)//2,len(batch)-1}
-        if (batch[0]['version']=='raw' and not any(x.casefold()=='bad' for x in Path(batch[0]['path']).parts)
+        if (batch[0]['version'] in ('raw','unknown') and not any(x.casefold()=='bad' for x in Path(batch[0]['path']).parts)
                 and any(batch[i]['status']=='pending' for i in indexes)):
             by_key[target_key(batch[0].get('target'))].append(batch)
     selected=[t for t in listed if not t['mapped_groups'] and by_key.get(t['key'])][:max(0,limit)]
@@ -480,7 +479,7 @@ def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='action',required=True)
     s=sub.add_parser('scan'); s.add_argument('root')
     s=sub.add_parser('sample'); s.add_argument('--groups',type=int,default=8); s.add_argument('--timeout',type=int,default=90)
-    s=sub.add_parser('sample-roots'); s.add_argument('--per-root',type=int,default=2); s.add_argument('--timeout',type=int,default=90)
+    s=sub.add_parser('sample-roots'); s.add_argument('--per-root',type=int,default=0); s.add_argument('--timeout',type=int,default=90)
     s=sub.add_parser('sample-missing-targets'); s.add_argument('--limit',type=int,default=5); s.add_argument('--timeout',type=int,default=60)
     s=sub.add_parser('sample-target'); s.add_argument('name'); s.add_argument('--timeout',type=int,default=90)
     s=sub.add_parser('solve'); s.add_argument('id'); s.add_argument('--retry',action='store_true'); s.add_argument('--timeout',type=int,default=90)

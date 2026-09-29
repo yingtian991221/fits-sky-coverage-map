@@ -4,6 +4,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 import archive as ar
 import catalogs
+import settings
 import roots as source_roots
 app=Flask(__name__,static_folder=str(ar.BASE/'static'))
 app.json.ensure_ascii=False
@@ -11,7 +12,7 @@ cache={}; lock=threading.Lock()
 jobs={}; job_lock=threading.Lock()
 scan_job=None
 def snapshot():
-    stamp=tuple((p.stat().st_mtime_ns,p.stat().st_size) if p.exists() else None for p in [ar.DB,ar.Path(str(ar.DB)+'-wal')])
+    stamp=tuple((p.stat().st_mtime_ns,p.stat().st_size) if p.exists() else None for p in [ar.DB,ar.Path(str(ar.DB)+'-wal'),settings.FILE])
     with lock:
         if cache.get('stamp')!=stamp:
             rows=ar.records(); gg=ar.groups(rows); cache.update(stamp=stamp,rows=rows,groups=gg,targets=ar.target_summaries(rows,gg))
@@ -36,6 +37,20 @@ def brief(g):
 def index(): return send_from_directory(app.static_folder,'index.html')
 @app.get('/api/health')
 def health(): return jsonify(ready=True)
+@app.get('/api/settings')
+def get_settings():
+    return jsonify(settings=settings.load(),solver=settings.solver_info(),catalog_cached=catalogs.FILE.exists())
+
+@app.post('/api/settings')
+def update_settings():
+    if request.mimetype!='application/json': return jsonify(error='需要 JSON 请求'),415
+    with job_lock:
+        if (scan_job and scan_job['state']=='running') or any(j['state']=='running' for j in jobs.values()):
+            return jsonify(error='请等待扫描/解析完成后修改设置'),409
+        try: settings.save(request.get_json(silent=True))
+        except (ValueError,OSError,TypeError) as exc: return jsonify(error=str(exc)),400
+    return get_settings()
+
 @app.get('/api/roots')
 def list_roots():
     return jsonify(roots=[dict(path=p,available=ar.Path(p).is_dir()) for p in source_roots.get_roots()])
@@ -73,6 +88,8 @@ def start_scan():
     if not isinstance(selected,list) or not selected or any(not isinstance(p,str) or p not in configured for p in selected):
         return jsonify(error='请先添加要扫描的目录'),400
     selected=list(dict.fromkeys(selected))
+    per_root=body.get('per_root',0)
+    if isinstance(per_root,bool) or not isinstance(per_root,int) or not 0<=per_root<=10000: return jsonify(error='批次数上限必须为 0–10000'),400
     sample=body.get('sample',True)
     if not isinstance(sample,bool): return jsonify(error='sample 必须为布尔值'),400
     with job_lock:
@@ -86,10 +103,12 @@ def start_scan():
             try: result=dict(root=root,ok=True,stats=ar.scan(root))
             except Exception as e: result=dict(root=root,ok=False,error=str(e))
             with job_lock: current['results'].append(result);current['done']=i
-        if sample and ar.ASTAP.is_file():
+        if sample and settings.solver_info()['executable_found']:
             with job_lock: current.update(phase='解析每目录的代表批次',current='ASTAP')
             try:
-                ar.sample_roots(per_root=2,timeout=90,roots=[r['root'] for r in current['results'] if r['ok']])
+                def progress(root,done,total):
+                    with job_lock: current.update(current=root,phase=f'代表批次 {done}/{total}')
+                ar.sample_roots(per_root=per_root,timeout=settings.load()['solver']['timeout'],roots=[r['root'] for r in current['results'] if r['ok']],progress=progress)
             except Exception as e:
                 with job_lock: current['error']='代表帧解析失败：'+str(e)
         elif sample:
@@ -127,7 +146,7 @@ def target_records():
     key=ar.target_key(q)
     all_matches=[g for g in snapshot()[1] if ar.target_key(g['target'])==key]
     visible=[g for g in filtered() if ar.target_key(g['target'])==key]
-    sample_needed=sum(g['geometry'] is None and any(f['status']=='pending' and f['version']=='raw' and 'bad' not in [p.casefold() for p in ar.Path(f['path']).parts] for f in g['files']) for g in all_matches)
+    sample_needed=sum(g['geometry'] is None and any(f['status']=='pending' and f['version'] in ('raw','unknown') and 'bad' not in [p.casefold() for p in ar.Path(f['path']).parts] for f in g['files']) for g in all_matches)
     snapshot()
     item=next((t for t in cache['targets'] if t['key']==key),None)
     suggestions=[] if item else [dict(target=t['target'],files=t['files'],raw_seconds=t['raw_seconds']) for t in cache['targets'] if key and key in t['key']][:12]
@@ -141,7 +160,7 @@ def solve_target_job():
     if not name or len(name)>200: return jsonify(error='请输入索引中的目标名'),400
     matches=[g for g in snapshot()[1] if ar.target_key(g['target'])==ar.target_key(name)]
     if not matches: return jsonify(error='本地索引中没有这个目标'),404
-    if not any(g['geometry'] is None and any(f['status']=='pending' and f['version']=='raw' and 'bad' not in [p.casefold() for p in ar.Path(f['path']).parts] for f in g['files']) for g in matches):
+    if not any(g['geometry'] is None and any(f['status']=='pending' and f['version'] in ('raw','unknown') and 'bad' not in [p.casefold() for p in ar.Path(f['path']).parts] for f in g['files']) for g in matches):
         return jsonify(error='这个目标没有可继续抽样的待确认原始批次'),409
     with job_lock:
         if scan_job and scan_job['state']=='running': return jsonify(error='目录扫描正在运行'),409
@@ -152,7 +171,7 @@ def solve_target_job():
         try:
             def progress(done,total):
                 with job_lock: jobs[ident].update(done=done,total=total)
-            ar.sample_target(name,90,progress)
+            ar.sample_target(name,settings.load()['solver']['timeout'],progress)
             with job_lock: jobs[ident]['state']='complete'
         except Exception as e:
             with job_lock: jobs[ident].update(state='failed',error=str(e))

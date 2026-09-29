@@ -20,7 +20,7 @@ if (-not $ready) {
     $app=Join-Path $PSScriptRoot 'app.py'
     $log=Join-Path $PSScriptRoot 'data\server.log'
     $err=Join-Path $PSScriptRoot 'data\server-error.log'
-    Start-Process -FilePath $python -ArgumentList @($app) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $err | Out-Null
+    Start-Process -FilePath $python -ArgumentList ('"' + $app + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $err | Out-Null
     for ($i=0;$i -lt 60;$i++) {
         Start-Sleep -Milliseconds 500
         try {

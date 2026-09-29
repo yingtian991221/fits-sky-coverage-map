@@ -1,0 +1,9 @@
+{
+  "solver": {
+    "executable": "",
+    "catalog_dir": "",
+    "database": "",
+    "timeout": 90
+  },
+  "device_overrides": []
+}
