@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference='Stop'
 $desktop=[Environment]::GetFolderPath('Desktop')
-$link=Join-Path $desktop 'Sky Archive.lnk'
+$link=Join-Path $desktop 'FITS Sky Coverage Map.lnk'
 if (Test-Path -LiteralPath $link) { Write-Output $link; return }
 $shell=New-Object -ComObject WScript.Shell
 $shortcut=$shell.CreateShortcut($link)

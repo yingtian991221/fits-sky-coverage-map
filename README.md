@@ -1,4 +1,4 @@
-# Historical Sky Coverage Archive / 历史天空覆盖档案
+# FITS Sky Coverage Map / FITS 天空覆盖地图
 
 A local, read-only FITS index and sky map for astrophotography archives. It groups raw Light frames by actual session and framing, shows solved field boundaries on Aladin Lite's survey map, and keeps unsolved frames visibly unconfirmed. Raw FITS files never leave your computer.
 
