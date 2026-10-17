@@ -45,8 +45,14 @@ def cache_stats(): return jsonify(disk_cache.stats())
 
 @app.get('/cached/<path:key>')
 def cached_asset(key):
-    if key=='aladin.js':
-        url='https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
+    assets={
+        'aladin.js':'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js',
+        'aladin-v2.js':'https://aladin.cds.unistra.fr/AladinLite/api/v2/latest/aladin.min.js',
+        'aladin-v2.css':'https://aladin.cds.unistra.fr/AladinLite/api/v2/latest/aladin.min.css',
+        'jquery.js':'https://code.jquery.com/jquery-3.7.1.min.js',
+    }
+    if key in assets:
+        url=assets[key]
     elif key.startswith('dss/') and re.fullmatch(r'(properties|Norder(?:[0-9]|1[0-9])/(?:Allsky\.(?:jpg|png)|Dir[0-9]+/Npix[0-9]+\.(?:jpg|png)))',key[4:]):
         url='https://alasky.cds.unistra.fr/DSS/DSSColor/'+key[4:]
     else:return jsonify(error='Unsupported cache path'),404
@@ -56,7 +62,7 @@ def cached_asset(key):
             lines=[line for line in body.decode('utf8').splitlines() if not line.strip().startswith('hips_service_url')]
             lines.append('hips_service_url = '+request.url_root.rstrip('/')+'/cached/dss')
             body=('\n'.join(lines)+'\n').encode('utf8')
-        return Response(body,content_type='application/javascript' if key=='aladin.js' else mime,headers={'Cache-Control':'no-store' if key=='dss/properties' else 'public, max-age=604800','X-Disk-Cache':'HIT' if hit else 'MISS'})
+        return Response(body,content_type='application/javascript' if key.endswith('.js') else ('text/css' if key.endswith('.css') else mime),headers={'Cache-Control':'no-store' if key=='dss/properties' else 'public, max-age=604800','X-Disk-Cache':'HIT' if hit else 'MISS'})
     except Exception as exc:return jsonify(error='Survey unavailable; this tile is not cached',detail=str(exc)),502
 @app.get('/api/settings')
 def get_settings():
