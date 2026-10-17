@@ -2,6 +2,8 @@
 
 [Portable installation validation](docs/portable-validation.md)
 
+[Windows EXE and persistent survey cache](docs/desktop.md)
+
 [中文使用说明](README.zh-CN.md) · [Configuration example](settings.example.json) · [Contributing](CONTRIBUTING.md)
 
 **Build a sky coverage map from your own local FITS collection.** Add your imaging folders, index their headers, recover actual field boundaries, and search for previous observations around an object or coordinate. Useful for finding forgotten data, checking framing across imaging systems, and identifying possible mosaic overlaps.

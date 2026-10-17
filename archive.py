@@ -3,7 +3,7 @@ import argparse, collections, hashlib, json, math, os, re, shutil, sqlite3, subp
 from datetime import datetime, timedelta
 if hasattr(sys.stdout,'reconfigure'): sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
-BASE = Path(__file__).resolve().parent
+from runtime_paths import BASE
 DATA = BASE / 'data'
 TMP = BASE / 'tmp'
 for p in (DATA, TMP, DATA/'solutions', DATA/'previews'): p.mkdir(parents=True, exist_ok=True)

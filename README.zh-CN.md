@@ -1,5 +1,7 @@
 # FITS 天空覆盖地图 / FITS Sky Coverage Map
 
+[Windows EXE 与巡天磁盘缓存](docs/desktop.md)
+
 [English](README.md) · [配置模板](settings.example.json) · [参与开发](CONTRIBUTING.md) · [独立安装验证](docs/portable-validation.md)
 
 **用你自己的 FITS 文件，建立你自己的天空覆盖地图。** 适合整理多设备、多晚积累的原始天文照片，查找旧数据是否覆盖某个坐标，以及发现可能的拼接或长短焦包含关系。

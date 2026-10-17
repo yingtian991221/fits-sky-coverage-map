@@ -2,6 +2,9 @@ __pycache__/
 data/
 tmp/
 .venv/
+dist/
+build/
+*.lnk
 .pytest_cache/
 *.pyc
 *.fit

@@ -7,7 +7,7 @@ import shutil
 import threading
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+from runtime_paths import BASE
 FILE = BASE / 'data' / 'settings.json'
 DEFAULTS = {'solver': {'executable': '', 'catalog_dir': '', 'database': '', 'timeout': 90},
             'device_overrides': []}

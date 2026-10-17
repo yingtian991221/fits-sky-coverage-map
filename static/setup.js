@@ -13,7 +13,7 @@ setupPanel.innerHTML=`<form id="settingsForm"><h2>Settings / 本机设置</h2>
 <h3>Optional equipment corrections / 可选设备名称校正</h3>
 <p>Use only if FITS TELESCOP is incorrect. Applies to a folder and its descendants; preserves original headers. 最具体的目录规则优先，FITS 原值始终保留。</p>
 <div id="deviceRules"></div><button type="button" id="addDeviceRule">Add correction / 添加校正</button>
-<p id="catalogAvailability"></p><p id="settingsMessage" role="status"></p>
+<p id="cacheInfo"></p><p id="catalogAvailability"></p><p id="settingsMessage" role="status"></p>
 <button type="submit" class="primary">Save / 保存</button> <button type="button" id="closeSettings">Close / 关闭</button></form>`;
 document.body.append(setupPanel);
 const setupButton=document.createElement('button');setupButton.textContent='Settings / 设置';setupButton.id='openSettings';
@@ -34,6 +34,7 @@ async function readSetup(){
     for(const [id,key] of [['solverExecutable','executable'],['solverCatalog','catalog_dir'],['solverDatabase','database'],['solverTimeout','timeout']])document.getElementById(id).value=localSettings.solver[key];
     document.querySelector('#solverDetection').textContent=data.solver.executable_found?'Found / 已找到：'+data.solver.resolved_executable:'ASTAP not detected / 未找到 ASTAP；仍可索引和读取有效 WCS。';
     document.querySelector('#catalogAvailability').textContent=data.catalog_cached?'Object label catalogue cached / 已有天体标注目录':'Optional labels / 可选标注：运行 python build_catalogs.py 下载小型天体目录；完整说明见 README。';
+    const cached=await api('/api/cache');document.querySelector('#cacheInfo').textContent=`巡天磁盘缓存：${cached.objects} 个资源 / ${(cached.bytes/1024/1024).toFixed(1)} MiB，上限 2 GiB。仅已浏览区域可复用；未缓存区域仍需联网。`;
     renderDeviceRules();
 }
 setupButton.onclick=async()=>{try{await readSetup();document.querySelector('#settingsMessage').textContent='';setupPanel.showModal()}catch(e){status(e.message)}};

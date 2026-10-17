@@ -3,7 +3,8 @@ import json, math
 from pathlib import Path
 import numpy as np
 
-FILE=Path(__file__).resolve().parent/'data'/'catalogs.json'
+from runtime_paths import BASE
+FILE=BASE/'data'/'catalogs.json'
 CATEGORIES=('Messier','NGC','Abell','LBN','LDN')
 CAPS={'Messier':25,'NGC':90,'Abell':40,'LBN':45,'LDN':45}
 _cache={}

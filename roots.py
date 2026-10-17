@@ -5,7 +5,7 @@ The list lives in data/roots.json so public source never contains local paths.
 import json
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+from runtime_paths import BASE
 CONFIG = BASE / 'data' / 'roots.json'
 
 

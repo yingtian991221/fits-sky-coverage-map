@@ -1,12 +1,14 @@
 import collections, json, math, re, threading, urllib.parse, urllib.request, uuid, xml.etree.ElementTree as ET
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 import archive as ar
 import catalogs
 import settings
+import disk_cache
+from runtime_paths import ASSETS
 import roots as source_roots
-app=Flask(__name__,static_folder=str(ar.BASE/'static'))
+app=Flask(__name__,static_folder=str(ASSETS/'static'))
 app.json.ensure_ascii=False
 cache={}; lock=threading.Lock()
 jobs={}; job_lock=threading.Lock()
@@ -36,7 +38,26 @@ def brief(g):
 @app.get('/')
 def index(): return send_from_directory(app.static_folder,'index.html')
 @app.get('/api/health')
-def health(): return jsonify(ready=True)
+def health(): return jsonify(ready=True,application='fits-sky-coverage-map',home=str(ar.BASE))
+
+@app.get('/api/cache')
+def cache_stats(): return jsonify(disk_cache.stats())
+
+@app.get('/cached/<path:key>')
+def cached_asset(key):
+    if key=='aladin.js':
+        url='https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
+    elif key.startswith('dss/') and re.fullmatch(r'(properties|Norder(?:[0-9]|1[0-9])/(?:Allsky\.(?:jpg|png)|Dir[0-9]+/Npix[0-9]+\.(?:jpg|png)))',key[4:]):
+        url='https://alasky.cds.unistra.fr/DSS/DSSColor/'+key[4:]
+    else:return jsonify(error='Unsupported cache path'),404
+    try:
+        body,mime,hit=disk_cache.fetch(url)
+        if key=='dss/properties':
+            lines=[line for line in body.decode('utf8').splitlines() if not line.strip().startswith('hips_service_url')]
+            lines.append('hips_service_url = '+request.url_root.rstrip('/')+'/cached/dss')
+            body=('\n'.join(lines)+'\n').encode('utf8')
+        return Response(body,content_type='application/javascript' if key=='aladin.js' else mime,headers={'Cache-Control':'no-store' if key=='dss/properties' else 'public, max-age=604800','X-Disk-Cache':'HIT' if hit else 'MISS'})
+    except Exception as exc:return jsonify(error='Survey unavailable; this tile is not cached',detail=str(exc)),502
 @app.get('/api/settings')
 def get_settings():
     return jsonify(settings=settings.load(),solver=settings.solver_info(),catalog_cached=catalogs.FILE.exists())
@@ -184,7 +205,10 @@ def job_status(ident):
 @app.get('/api/group/<key>')
 def group_detail(key):
     g=next((g for g in snapshot()[1] if g['id']==key),None)
-    return (jsonify(g),200) if g else (jsonify(error='视场不存在；请刷新'),404)
+    if not g:return jsonify(error='视场不存在；请刷新'),404
+    result=brief(g)
+    result['files']=[{k:f.get(k) for k in ('id','path','filter','exposure','evidence','version','date_local','date')} for f in g['files']]
+    return jsonify(result)
 @app.get('/api/query')
 def query():
     try:
